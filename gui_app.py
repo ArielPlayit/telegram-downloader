@@ -1,4 +1,3 @@
-import json
 import re
 import sys
 from datetime import datetime
@@ -30,174 +29,13 @@ from PySide6.QtWidgets import (
 )
 
 from watch_saved_downloads import CONFIG_FILE, queue_message_for_retry, run
+from src.services.history_repository import DownloadHistoryRepository
+from src.services.i18n_service import DEFAULT_LANGUAGE, load_translations, normalize_language
 
 ROOT = Path(__file__).resolve().parent
-HISTORY_FILE = ROOT / "downloads" / ".download_history.json"
-
-TRANSLATIONS: Dict[str, Dict[str, str]] = {
-    "es": {
-        "app_title": "Telegram Downloader",
-        "subtitle": "Centro de descargas de Telegram con cola inteligente",
-        "tab_monitor": "Monitor",
-        "tab_history": "Historial",
-        "tab_settings": "Configuracion",
-        "btn_start": "Iniciar monitor",
-        "btn_stop": "Detener monitor",
-        "btn_clear_history": "Limpiar historial",
-        "btn_save_config": "Guardar configuracion",
-        "btn_pick_folder": "Elegir carpeta",
-        "btn_language": "Cambiar idioma",
-        "btn_retry": "Reintentar",
-        "label_events": "Eventos",
-        "label_language": "Idioma",
-        "lang_es": "Espanol",
-        "lang_en": "Ingles",
-        "header_file": "Archivo",
-        "header_progress": "Progreso",
-        "header_speed": "Velocidad",
-        "header_eta": "ETA",
-        "header_status": "Estado",
-        "header_message": "ID mensaje",
-        "header_error": "Ultimo error",
-        "header_updated": "Actualizado",
-        "header_action": "Accion",
-        "header_date": "Fecha",
-        "header_path": "Ruta",
-        "status_pending": "Pendiente",
-        "status_queued": "En cola",
-        "status_downloading": "Descargando",
-        "status_done": "Completado",
-        "status_failed": "Error",
-        "text_not_available": "--",
-        "field_api_id": "ID de API de Telegram",
-        "field_api_hash": "Hash de API de Telegram",
-        "field_download_path": "Carpeta de descargas",
-        "field_session": "Nombre de sesion local",
-        "field_watch_enabled": "Activar monitor de Mensajes guardados",
-        "field_poll": "Intervalo de verificacion (segundos)",
-        "field_concurrent": "Descargas simultaneas maximas",
-        "field_speed": "Limite global de velocidad (KB/s, 0 = sin limite)",
-        "watch_enabled_true": "Si",
-        "watch_enabled_false": "No",
-        "title_settings": "Configuracion",
-        "msg_select_folder": "Seleccionar carpeta de descargas",
-        "msg_language_title": "Seleccionar idioma",
-        "msg_language_body": "Elige el idioma para toda la interfaz",
-        "msg_config_saved": "Configuracion guardada correctamente",
-        "msg_config_saved_log": "[gui] configuracion guardada en config.py",
-        "msg_error": "Error",
-        "msg_config_error": "No se pudo guardar config.py: {error}",
-        "msg_invalid_api_hash": "El hash de API no puede estar vacio",
-        "msg_watcher_starting": "[gui] iniciando monitor...",
-        "msg_watcher_stopping": "[gui] deteniendo monitor...",
-        "msg_watcher_stopped": "[gui] monitor detenido",
-        "msg_download_done": "[gui] descarga completada: {name}",
-        "msg_history_cleared": "[gui] historial limpiado",
-        "msg_retry_queued": "[gui] reintento encolado para mensaje {id}",
-        "tray_done_title": "Telegram Downloader",
-        "tray_done_body": "Descarga completada: {name}",
-        "lang_changed": "[gui] idioma cambiado a {language}",
-        "eta_unknown": "Sin ETA",
-        "eta_seconds": "{value}s",
-        "eta_minutes": "{value}m",
-        "eta_hours": "{value}h",
-        "watcher_started": "[watcher] iniciado. monitoreando Mensajes Guardados...",
-        "watcher_initialized": "[watcher] inicializado en mensaje id {id}",
-        "watcher_recovered": "[watcher] mensaje recuperado en cola {id}",
-        "watcher_workers": "[watcher] workers: {workers}, limite global: {speed} KB/s",
-        "watcher_stop_requested": "[watcher] detencion solicitada",
-        "watcher_queued": "[watcher] mensaje en cola {id}",
-        "watcher_waiting_queue": "[watcher] esperando terminar la cola pendiente...",
-        "watcher_downloaded": "[watcher] descargado: {path}",
-        "watcher_complete": "[watcher] ya completo: {name}",
-        "watcher_resuming": "[watcher] reanudando {name}: {done}/{total} MB",
-        "watcher_failed": "[watcher] fallo mensaje {id}: {error}",
-        "watcher_retry": "[watcher] reintentando mensaje {id} (intento {attempt}/3)",
-        "watcher_giving_up": "[watcher] descartando mensaje {id} tras reintentos",
-        "gui_error": "[gui] error: {error}",
-    },
-    "en": {
-        "app_title": "Telegram Downloader",
-        "subtitle": "Telegram download center with smart queue",
-        "tab_monitor": "Monitor",
-        "tab_history": "History",
-        "tab_settings": "Settings",
-        "btn_start": "Start monitor",
-        "btn_stop": "Stop monitor",
-        "btn_clear_history": "Clear history",
-        "btn_save_config": "Save settings",
-        "btn_pick_folder": "Choose folder",
-        "btn_language": "Change language",
-        "btn_retry": "Retry",
-        "label_events": "Events",
-        "label_language": "Language",
-        "lang_es": "Spanish",
-        "lang_en": "English",
-        "header_file": "File",
-        "header_progress": "Progress",
-        "header_speed": "Speed",
-        "header_eta": "ETA",
-        "header_status": "Status",
-        "header_message": "Message ID",
-        "header_error": "Last error",
-        "header_updated": "Updated",
-        "header_action": "Action",
-        "header_date": "Date",
-        "header_path": "Path",
-        "status_pending": "Pending",
-        "status_queued": "Queued",
-        "status_downloading": "Downloading",
-        "status_done": "Completed",
-        "status_failed": "Failed",
-        "text_not_available": "--",
-        "field_api_id": "Telegram API ID",
-        "field_api_hash": "Telegram API Hash",
-        "field_download_path": "Download folder",
-        "field_session": "Local session name",
-        "field_watch_enabled": "Enable Saved Messages watcher",
-        "field_poll": "Polling interval (seconds)",
-        "field_concurrent": "Max concurrent downloads",
-        "field_speed": "Global speed cap (KB/s, 0 = unlimited)",
-        "watch_enabled_true": "Yes",
-        "watch_enabled_false": "No",
-        "title_settings": "Settings",
-        "msg_select_folder": "Select download folder",
-        "msg_language_title": "Select language",
-        "msg_language_body": "Choose the language for the full interface",
-        "msg_config_saved": "Settings saved successfully",
-        "msg_config_saved_log": "[gui] settings saved in config.py",
-        "msg_error": "Error",
-        "msg_config_error": "Could not save config.py: {error}",
-        "msg_invalid_api_hash": "API hash cannot be empty",
-        "msg_watcher_starting": "[gui] starting monitor...",
-        "msg_watcher_stopping": "[gui] stopping monitor...",
-        "msg_watcher_stopped": "[gui] monitor stopped",
-        "msg_download_done": "[gui] download completed: {name}",
-        "msg_history_cleared": "[gui] history cleared",
-        "msg_retry_queued": "[gui] queued retry for message {id}",
-        "tray_done_title": "Telegram Downloader",
-        "tray_done_body": "Download completed: {name}",
-        "lang_changed": "[gui] language changed to {language}",
-        "eta_unknown": "No ETA",
-        "eta_seconds": "{value}s",
-        "eta_minutes": "{value}m",
-        "eta_hours": "{value}h",
-        "watcher_started": "[watcher] started. monitoring Saved Messages...",
-        "watcher_initialized": "[watcher] initialized at message id {id}",
-        "watcher_recovered": "[watcher] recovered queued message {id}",
-        "watcher_workers": "[watcher] workers: {workers}, global cap: {speed} KB/s",
-        "watcher_stop_requested": "[watcher] stop requested",
-        "watcher_queued": "[watcher] queued message {id}",
-        "watcher_waiting_queue": "[watcher] waiting queued downloads to finish...",
-        "watcher_downloaded": "[watcher] downloaded: {path}",
-        "watcher_complete": "[watcher] already complete: {name}",
-        "watcher_resuming": "[watcher] resuming {name}: {done}/{total} MB",
-        "watcher_failed": "[watcher] failed message {id}: {error}",
-        "watcher_retry": "[watcher] retrying message {id} (attempt {attempt}/3)",
-        "watcher_giving_up": "[watcher] giving up message {id} after retries",
-        "gui_error": "[gui] error: {error}",
-    },
-}
+HISTORY_DB_FILE = ROOT / "downloads" / ".download_history.db"
+LEGACY_HISTORY_FILE = ROOT / "downloads" / ".download_history.json"
+LOCALES_DIR = ROOT / "locales"
 
 
 class WatcherThread(QThread):
@@ -284,13 +122,19 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.resize(1180, 760)
 
+        self.translations = load_translations(LOCALES_DIR)
         cfg = self._load_config_from_file()
-        self.language = str(cfg.get("LANGUAGE", "es")).strip().lower()
-        if self.language not in TRANSLATIONS:
-            self.language = "es"
+        self.language = normalize_language(str(cfg.get("LANGUAGE", DEFAULT_LANGUAGE)))
+        if self.language not in self.translations:
+            self.language = DEFAULT_LANGUAGE
 
         self.watcher_thread: WatcherThread | None = None
         self.active_rows: Dict[int, int] = {}
+        self.history_repo = DownloadHistoryRepository(
+            HISTORY_DB_FILE,
+            legacy_json_path=LEGACY_HISTORY_FILE,
+            max_rows=1000,
+        )
 
         self.tray = QSystemTrayIcon(self)
         if self.tray.isSystemTrayAvailable():
@@ -445,7 +289,11 @@ class MainWindow(QMainWindow):
         self.watch_enabled_input.setCurrentIndex(index)
 
     def t(self, key: str) -> str:
-        return TRANSLATIONS[self.language].get(key, key)
+        current = self.translations.get(self.language, {})
+        if key in current:
+            return current[key]
+        fallback = self.translations.get(DEFAULT_LANGUAGE, {})
+        return fallback.get(key, key)
 
     def language_display_name(self) -> str:
         return self.t("lang_en") if self.language == "en" else self.t("lang_es")
@@ -760,29 +608,25 @@ class MainWindow(QMainWindow):
         return self.t("eta_hours").format(value=int(eta_seconds // 3600))
 
     def _load_history(self) -> List[Dict[str, str]]:
-        if not HISTORY_FILE.exists():
-            return []
-        try:
-            return json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            return []
+        return self.history_repo.list_entries(limit=1000)
 
     def _save_history(self, entries: List[Dict[str, str]]) -> None:
-        HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-        HISTORY_FILE.write_text(json.dumps(entries, ensure_ascii=True, indent=2), encoding="utf-8")
+        self.history_repo.clear()
+        for item in reversed(entries):
+            self.history_repo.add_entry(
+                timestamp=str(item.get("timestamp", "")),
+                name=str(item.get("name", "")),
+                path=str(item.get("path", "")),
+                message_id=str(item.get("message_id", "")),
+            )
 
     def add_history_entry(self, name: str, path: str, message_id: int) -> None:
-        entries = self._load_history()
-        entries.insert(
-            0,
-            {
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "name": name,
-                "path": path,
-                "message_id": str(message_id),
-            },
+        self.history_repo.add_entry(
+            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            name=name,
+            path=path,
+            message_id=str(message_id),
         )
-        self._save_history(entries[:1000])
         self.load_history_table()
 
     def load_history_table(self) -> None:
@@ -797,7 +641,7 @@ class MainWindow(QMainWindow):
             self.history_table.setItem(row, 3, QTableWidgetItem(item.get("message_id", "")))
 
     def clear_history(self) -> None:
-        self._save_history([])
+        self.history_repo.clear()
         self.load_history_table()
         self.append_log(self.t("msg_history_cleared"))
 
