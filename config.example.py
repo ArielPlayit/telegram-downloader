@@ -16,3 +16,13 @@ SESSION_NAME = 'telegram_downloader'   # Nombre del archivo de sesión
 # Watcher de Saved Messages (modo terminal)
 WATCH_SAVED_MESSAGES = False
 WATCH_POLL_SECONDS = 5
+
+# Cola de descargas
+# Cantidad de descargas simultaneas (1 = una por vez)
+MAX_CONCURRENT_DOWNLOADS = 2
+
+# Limite global de velocidad en KB/s (0 = ilimitado)
+MAX_DOWNLOAD_SPEED_KBPS = 0
+
+# Idioma de la interfaz grafica: 'es' o 'en'
+LANGUAGE = 'es'

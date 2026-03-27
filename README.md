@@ -1,6 +1,6 @@
 ﻿# Telegram Downloader
 
-Descargador de archivos de Telegram desde terminal usando Telethon.
+Descargador de archivos de Telegram con interfaz grafica (PyQt5) y modo terminal usando Telethon.
 
 ## Caracteristicas
 
@@ -8,6 +8,7 @@ Descargador de archivos de Telegram desde terminal usando Telethon.
 - Soporta enlaces publicos y privados (`t.me/c/...`)
 - Reanudacion de descargas de documentos si cierras la terminal
 - Watcher para `Saved Messages` (sin enlace)
+- Interfaz grafica con monitor en tiempo real, historial y configuracion
 
 ## Requisitos
 
@@ -38,6 +39,20 @@ WATCH_POLL_SECONDS = 5
 ```powershell
 python examples/download_example.py
 ```
+
+## Uso con interfaz grafica
+
+```powershell
+run_gui.bat
+```
+
+Desde la GUI puedes:
+
+- Iniciar y detener el watcher de `Saved Messages`
+- Ver progreso de descarga en tiempo real
+- Ver historial de descargas
+- Editar y guardar `config.py`
+- Recibir notificaciones al finalizar una descarga
 
 ## Uso sin enlace (Saved Messages)
 
