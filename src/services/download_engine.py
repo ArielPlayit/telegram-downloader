@@ -11,6 +11,14 @@ from src.services.integrity_service import verify_download_integrity
 ProgressCallback = Callable[[int, str, int, int, float, float, float], None]
 
 
+class DownloadPausedError(Exception):
+    pass
+
+
+class DownloadCancelledError(Exception):
+    pass
+
+
 def has_media(message: Any) -> bool:
     return bool(getattr(message, "file", None) or getattr(message, "media", None))
 
@@ -91,12 +99,28 @@ class DownloadEngine:
         message: Any,
         on_log: Optional[Callable[[str], None]] = None,
         on_progress: Optional[ProgressCallback] = None,
+        should_pause: Optional[Callable[[int], bool]] = None,
+        should_cancel: Optional[Callable[[int], bool]] = None,
     ) -> Path:
         target = self.download_dir / target_name_for_message(message)
         if getattr(message, "media", None) and getattr(message.media, "document", None):
-            return await self._resumable_download_document(message, target, on_log=on_log, on_progress=on_progress)
+            return await self._resumable_download_document(
+                message,
+                target,
+                on_log=on_log,
+                on_progress=on_progress,
+                should_pause=should_pause,
+                should_cancel=should_cancel,
+            )
 
-        return await self._resumable_download_generic(message, target, on_log=on_log, on_progress=on_progress)
+        return await self._resumable_download_generic(
+            message,
+            target,
+            on_log=on_log,
+            on_progress=on_progress,
+            should_pause=should_pause,
+            should_cancel=should_cancel,
+        )
 
     async def _resumable_download_document(
         self,
@@ -104,7 +128,10 @@ class DownloadEngine:
         final_path: Path,
         on_log: Optional[Callable[[str], None]] = None,
         on_progress: Optional[ProgressCallback] = None,
+        should_pause: Optional[Callable[[int], bool]] = None,
+        should_cancel: Optional[Callable[[int], bool]] = None,
     ) -> Path:
+        message_id = int(message.id)
         doc = message.media.document
         total = int(getattr(doc, "size", 0) or 0)
 
@@ -136,23 +163,32 @@ class DownloadEngine:
                         break
                     stream_hasher.update(existing_chunk)
 
-        with part_path.open(mode) as fh:
-            current = downloaded
-            async for chunk in self.client.iter_download(doc, offset=downloaded):
-                fh.write(chunk)
-                stream_hasher.update(chunk)
-                current += len(chunk)
-                self._emit_progress(
-                    int(message.id),
-                    final_path.name,
-                    current,
-                    total,
-                    started_at=started,
-                    base_downloaded=downloaded,
-                    on_progress=on_progress,
-                )
-                if self.speed_limiter:
-                    await self.speed_limiter.throttle(len(chunk))
+        try:
+            with part_path.open(mode) as fh:
+                current = downloaded
+                async for chunk in self.client.iter_download(doc, offset=downloaded):
+                    if should_cancel and should_cancel(message_id):
+                        raise DownloadCancelledError(f"Cancelled message {message_id}")
+                    if should_pause and should_pause(message_id):
+                        raise DownloadPausedError(f"Paused message {message_id}")
+
+                    fh.write(chunk)
+                    stream_hasher.update(chunk)
+                    current += len(chunk)
+                    self._emit_progress(
+                        message_id,
+                        final_path.name,
+                        current,
+                        total,
+                        started_at=started,
+                        base_downloaded=downloaded,
+                        on_progress=on_progress,
+                    )
+                    if self.speed_limiter:
+                        await self.speed_limiter.throttle(len(chunk))
+        except DownloadCancelledError:
+            part_path.unlink(missing_ok=True)
+            raise
 
         if total and part_path.stat().st_size != total:
             raise RuntimeError(f"Incomplete download for {final_path.name}")
@@ -172,7 +208,10 @@ class DownloadEngine:
         target: Path,
         on_log: Optional[Callable[[str], None]] = None,
         on_progress: Optional[ProgressCallback] = None,
+        should_pause: Optional[Callable[[int], bool]] = None,
+        should_cancel: Optional[Callable[[int], bool]] = None,
     ) -> Path:
+        message_id = int(message.id)
         total = int(getattr(getattr(message, "file", None), "size", 0) or 0)
         if target.exists() and total > 0 and target.stat().st_size == total:
             self._emit_log(on_log, f"[watcher] already complete: {target.name}")
@@ -199,23 +238,32 @@ class DownloadEngine:
                         break
                     stream_hasher.update(existing_chunk)
 
-        with part_path.open(mode) as fh:
-            current = downloaded
-            async for chunk in self.client.iter_download(media_ref, offset=downloaded):
-                fh.write(chunk)
-                stream_hasher.update(chunk)
-                current += len(chunk)
-                self._emit_progress(
-                    int(message.id),
-                    target.name,
-                    current,
-                    total,
-                    started_at=started,
-                    base_downloaded=downloaded,
-                    on_progress=on_progress,
-                )
-                if self.speed_limiter:
-                    await self.speed_limiter.throttle(len(chunk))
+        try:
+            with part_path.open(mode) as fh:
+                current = downloaded
+                async for chunk in self.client.iter_download(media_ref, offset=downloaded):
+                    if should_cancel and should_cancel(message_id):
+                        raise DownloadCancelledError(f"Cancelled message {message_id}")
+                    if should_pause and should_pause(message_id):
+                        raise DownloadPausedError(f"Paused message {message_id}")
+
+                    fh.write(chunk)
+                    stream_hasher.update(chunk)
+                    current += len(chunk)
+                    self._emit_progress(
+                        message_id,
+                        target.name,
+                        current,
+                        total,
+                        started_at=started,
+                        base_downloaded=downloaded,
+                        on_progress=on_progress,
+                    )
+                    if self.speed_limiter:
+                        await self.speed_limiter.throttle(len(chunk))
+        except DownloadCancelledError:
+            part_path.unlink(missing_ok=True)
+            raise
 
         if total and part_path.stat().st_size != total:
             raise RuntimeError(f"Incomplete download for {target.name}")

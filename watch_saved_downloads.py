@@ -1,11 +1,19 @@
 import asyncio
 import os
+import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Set
 
 from telethon import TelegramClient
 
-from src.services.download_engine import DownloadEngine, GlobalSpeedLimiter, has_media, target_name_for_message
+from src.services.download_engine import (
+    DownloadCancelledError,
+    DownloadEngine,
+    DownloadPausedError,
+    GlobalSpeedLimiter,
+    has_media,
+    target_name_for_message,
+)
 from src.services.state_repository import WatcherStateRepository
 
 ROOT = Path(__file__).resolve().parent
@@ -14,6 +22,10 @@ LEGACY_STATE_FILE = ROOT / "downloads" / ".saved_watcher_state.json"
 STATE_DB_FILE = ROOT / "downloads" / ".saved_watcher_state.db"
 
 ProgressCallback = Callable[[int, str, int, int, float, float, float], None]
+
+_CONTROL_LOCK = threading.Lock()
+_PAUSED_IDS: Set[int] = set()
+_CANCEL_IDS: Set[int] = set()
 
 
 def load_config() -> Dict[str, Any]:
@@ -41,8 +53,41 @@ def load_config() -> Dict[str, Any]:
 
 
 def queue_message_for_retry(message_id: int) -> None:
+    mid = int(message_id)
+    with _CONTROL_LOCK:
+        _PAUSED_IDS.discard(mid)
+        _CANCEL_IDS.discard(mid)
     repo = WatcherStateRepository(STATE_DB_FILE, legacy_state_path=LEGACY_STATE_FILE)
-    repo.add_pending_id(int(message_id))
+    repo.add_pending_id(mid)
+
+
+def request_pause_for_message(message_id: int) -> None:
+    mid = int(message_id)
+    with _CONTROL_LOCK:
+        _PAUSED_IDS.add(mid)
+        _CANCEL_IDS.discard(mid)
+
+
+def request_cancel_for_message(message_id: int) -> None:
+    mid = int(message_id)
+    with _CONTROL_LOCK:
+        _CANCEL_IDS.add(mid)
+        _PAUSED_IDS.discard(mid)
+
+
+def _is_paused(message_id: int) -> bool:
+    with _CONTROL_LOCK:
+        return int(message_id) in _PAUSED_IDS
+
+
+def _is_cancel_requested(message_id: int) -> bool:
+    with _CONTROL_LOCK:
+        return int(message_id) in _CANCEL_IDS
+
+
+def _clear_cancel_request(message_id: int) -> None:
+    with _CONTROL_LOCK:
+        _CANCEL_IDS.discard(int(message_id))
 
 
 def emit_log(on_log: Optional[Callable[[str], None]], text: str) -> None:
@@ -58,6 +103,8 @@ async def run(
     on_download_queued: Optional[Callable[[int, str], None]] = None,
     on_download_start: Optional[Callable[[int, str], None]] = None,
     on_download_done: Optional[Callable[[int, Path], None]] = None,
+    on_download_paused: Optional[Callable[[int, str], None]] = None,
+    on_download_cancelled: Optional[Callable[[int, str], None]] = None,
     on_download_failed: Optional[Callable[[int, str, str], None]] = None,
     should_stop: Optional[Callable[[], bool]] = None,
 ) -> None:
@@ -100,7 +147,11 @@ async def run(
             persisted = set(state_repo.load_pending_ids())
             pending_ids.update(persisted)
 
-            missing_ids = sorted(pending_ids.difference(queued_ids).difference(active_ids))
+            missing_ids = sorted(
+                msg_id
+                for msg_id in pending_ids
+                if msg_id not in queued_ids and msg_id not in active_ids and not _is_paused(msg_id)
+            )
             if not missing_ids:
                 return
 
@@ -161,6 +212,27 @@ async def run(
 
                 msg_id = int(msg.id)
                 name = target_name_for_message(msg)
+
+                if _is_cancel_requested(msg_id):
+                    emit_log(on_log, f"[watcher] cancelled message {msg_id}")
+                    retry_counts.pop(msg_id, None)
+                    pending_ids.discard(msg_id)
+                    queued_ids.discard(msg_id)
+                    state_repo.remove_pending_id(msg_id)
+                    _clear_cancel_request(msg_id)
+                    if on_download_cancelled:
+                        on_download_cancelled(msg_id, name)
+                    queue.task_done()
+                    continue
+
+                if _is_paused(msg_id):
+                    emit_log(on_log, f"[watcher] paused message {msg_id}")
+                    queued_ids.discard(msg_id)
+                    if on_download_paused:
+                        on_download_paused(msg_id, name)
+                    queue.task_done()
+                    continue
+
                 active_ids.add(msg_id)
 
                 if on_download_start:
@@ -171,6 +243,8 @@ async def run(
                         msg,
                         on_log=on_log,
                         on_progress=on_progress,
+                        should_pause=_is_paused,
+                        should_cancel=_is_cancel_requested,
                     )
                     if on_download_done:
                         on_download_done(msg_id, path)
@@ -179,6 +253,20 @@ async def run(
                     pending_ids.discard(msg_id)
                     queued_ids.discard(msg_id)
                     state_repo.remove_pending_id(msg_id)
+                except DownloadPausedError:
+                    emit_log(on_log, f"[watcher] paused message {msg_id}")
+                    queued_ids.discard(msg_id)
+                    if on_download_paused:
+                        on_download_paused(msg_id, name)
+                except DownloadCancelledError:
+                    emit_log(on_log, f"[watcher] cancelled message {msg_id}")
+                    retry_counts.pop(msg_id, None)
+                    pending_ids.discard(msg_id)
+                    queued_ids.discard(msg_id)
+                    state_repo.remove_pending_id(msg_id)
+                    _clear_cancel_request(msg_id)
+                    if on_download_cancelled:
+                        on_download_cancelled(msg_id, name)
                 except Exception as exc:
                     emit_log(on_log, f"[watcher] failed message {msg_id}: {exc}")
                     attempts = retry_counts.get(msg_id, 0) + 1

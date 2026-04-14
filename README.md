@@ -46,6 +46,23 @@ python examples/download_example.py
 run_gui.bat
 ```
 
+## Empaquetar como EXE (Windows)
+
+```powershell
+build_exe.bat
+```
+
+El ejecutable queda en:
+
+```text
+dist/TelegramDownloader/TelegramDownloader.exe
+```
+
+Notas:
+
+- Este build es tipo `onedir` (carpeta con exe y dependencias), recomendado para PySide6.
+- Si editas `config.py`, vuelve a ejecutar `build_exe.bat` para incluir cambios por defecto en el paquete.
+
 Desde la GUI puedes:
 
 - Iniciar y detener el watcher de `Saved Messages`
